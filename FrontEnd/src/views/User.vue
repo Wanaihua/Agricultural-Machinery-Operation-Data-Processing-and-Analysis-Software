@@ -13,7 +13,7 @@
       <el-button type="primary" @click="handleAdd">新增<i class="el-icon-circle-plus-outline"></i> </el-button>
       <el-button type="danger" @click="deleteBatch">批量删除<i class="el-icon-remove-outline"></i> </el-button>
       <el-upload
-          action="http://localhost:8090/user/import" :show-file-list="false" accept="xlsx" :on-success="handleExcelImportSuccess" style="display: inline-block"> <!--上传地址-->
+          action="http://127.0.0.1:8000/user/import" :show-file-list="false" accept="xlsx" :on-success="handleExcelImportSuccess" style="display: inline-block"> <!--上传地址-->
       <el-button type="primary" class="ml-5">导入<i class="el-icon-bottom"></i> </el-button>
       </el-upload>
       <el-button type="primary" @click="exp" class="ml-5">导出<i class="el-icon-top"></i> </el-button>
@@ -247,7 +247,7 @@ export default {
         type: 'warning'
       }).then(() => {
 
-        window.open("http://localhost:8090/user/export");
+        window.open("http://127.0.0.1:8000/user/export");
         this.$message({
           message: '导出成功',
           type: 'success'

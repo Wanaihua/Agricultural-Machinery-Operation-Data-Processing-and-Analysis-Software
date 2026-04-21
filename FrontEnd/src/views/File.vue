@@ -9,7 +9,7 @@
 
     <div style="padding: 10px 0">
       <el-upload
-          action="http://localhost:8090/file/upload" :show-file-list="false" accept="xlsx" :on-success="handleFileUploadSuccess" style="display: inline-block"> <!--上传地址-->
+          action="http://127.0.0.1:8000/file/upload" :show-file-list="false" accept="xlsx" :on-success="handleFileUploadSuccess" style="display: inline-block"> <!--上传地址-->
         <el-button type="primary" class="ml-5">上传<i class="el-icon-top"></i> </el-button>
       </el-upload>
       <el-button type="danger" @click="deleteBatch" style="display:inline-block; margin-left: 10px;">批量删除<i class="el-icon-remove-outline"></i> </el-button>

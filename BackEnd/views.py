@@ -702,6 +702,27 @@ def file_upload(request):
     if uploaded_file is None:
         return Response({"code": "400", "data": None, "msg": "未获取到上传文件"}, status=400)
 
+    # 先基于上传内容计算md5，命中则复用已有文件URL，避免重复落盘
+    md5_ctx = hashlib.md5()
+    for chunk in uploaded_file.chunks():
+        md5_ctx.update(chunk)
+    file_md5 = md5_ctx.hexdigest()
+
+    existed = _fetch_one(
+        """
+        SELECT id, url
+        FROM file
+        WHERE md5=%s AND IFNULL(is_delete,0)=0
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (file_md5,),
+    )
+    if existed and existed.get("url"):
+        return JsonResponse(existed.get("url"), safe=False)
+
+    uploaded_file.seek(0)
+
     media_root = Path(settings.MEDIA_ROOT)
     media_root.mkdir(parents=True, exist_ok=True)
 
@@ -715,8 +736,7 @@ def file_upload(request):
             destination.write(chunk)
 
     file_size_kb = round(file_path.stat().st_size / 1024, 2)
-    file_md5 = hashlib.md5(file_path.read_bytes()).hexdigest()
-    backend_public_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8090").rstrip("/")
+    backend_public_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
     file_url = f"{backend_public_url}{settings.MEDIA_URL}{stored_name}"
 
     _execute(

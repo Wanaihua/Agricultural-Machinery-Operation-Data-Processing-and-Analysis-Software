@@ -234,7 +234,7 @@ export default {
         type: 'warning'
       }).then(() => {
 
-        window.open("http://localhost:8090/menu/export");
+        window.open("http://127.0.0.1:8000/menu/export");
         this.$message({
           message: '导出成功',
           type: 'success'
