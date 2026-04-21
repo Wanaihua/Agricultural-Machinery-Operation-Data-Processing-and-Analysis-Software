@@ -10,8 +10,11 @@
   "dependencies": {
     "axios": "^1.15.0",
     "core-js": "^3.8.3",
-    "vue": "^3.2.13",
-    "vue-router": "^5.0.4"
+    "echarts": "^6.0.0",
+    "element-ui": "^2.15.14",
+    "vue": "^2.7.16",
+    "vue-router": "^3.6.5",
+    "vuex": "^3.6.2"
   },
   "devDependencies": {
     "@babel/core": "^7.12.16",
@@ -20,7 +23,8 @@
     "@vue/cli-plugin-eslint": "~5.0.0",
     "@vue/cli-service": "~5.0.0",
     "eslint": "^7.32.0",
-    "eslint-plugin-vue": "^8.0.3"
+    "eslint-plugin-vue": "^8.0.3",
+    "vue-template-compiler": "^2.7.16"
   },
   "eslintConfig": {
     "root": true,
@@ -28,13 +32,20 @@
       "node": true
     },
     "extends": [
-      "plugin:vue/vue3-essential",
+      "plugin:vue/essential",
       "eslint:recommended"
     ],
     "parserOptions": {
       "parser": "@babel/eslint-parser"
     },
-    "rules": {}
+    "rules": {
+      "vue/multi-word-component-names": "off",
+      "vue/no-deprecated-slot-attribute": "off",
+      "vue/no-deprecated-slot-scope-attribute": "off",
+      "vue/no-deprecated-v-bind-sync": "off",
+      "vue/no-unused-vars": "off",
+      "no-unused-vars": "off"
+    }
   },
   "browserslist": [
     "> 1%",

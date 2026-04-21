@@ -1,0 +1,2 @@
+"use strict";(self["webpackChunkfrontend"]=self["webpackChunkfrontend"]||[]).push([[32],{1032:function(n,t,e){e.r(t),e.d(t,{default:function(){return f}});var u=function(){var n=this,t=n._self._c;return t("div",{staticClass:"bgImg",staticStyle:{height:"100vh"}})},l=[],s={name:"NotFound"},r=s,a=e(1656),c=(0,a.A)(r,u,l,!1,null,null,null),f=c.exports}}]);
+//# sourceMappingURL=32.ef63c37b.js.map
