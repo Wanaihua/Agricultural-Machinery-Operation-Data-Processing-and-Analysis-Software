@@ -1,13 +1,28 @@
 import hashlib
+import csv
+import math
 import os
+import re
 import uuid
+import time
+from datetime import datetime
+from statistics import mean
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pymysql
 from django.conf import settings
+from django.db import transaction
 from django.http import JsonResponse
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+from openpyxl import load_workbook
+import xlrd
+
+from BackEnd.generated_api.models import File as DatasetFile
+from BackEnd.generated_api.models import ImportLog, Rate, Track, Trackpoints, Work
 
 
 def ok(data=None, msg="success"):
@@ -84,6 +99,249 @@ def _build_menu_tree(rows):
 
 def _to_md5(text):
     return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def _json_response(message="success", data=None, code=200, status=200):
+    return JsonResponse({"code": code, "message": message, "data": data or {}}, status=status)
+
+
+def _normalize_header(value):
+    return re.sub(r"[\s\-_/\\.:：，,。()（）\[\]{}]+", "", str(value).strip().lower())
+
+
+def _parse_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_datetime_value(value, datemode=0):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return xlrd.xldate_as_datetime(value, datemode)
+        except Exception:
+            return None
+
+    text = str(value).strip()
+    patterns = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+    ]
+    for pattern in patterns:
+        try:
+            return datetime.strptime(text, pattern)
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_dataset_file(file_url_or_path):
+    if not file_url_or_path:
+        return None
+
+    raw_path = str(file_url_or_path).replace("\\", "/")
+    parsed_path = urlparse(raw_path).path if raw_path.startswith(("http://", "https://")) else raw_path
+    parsed_path = parsed_path.lstrip("/")
+
+    if parsed_path.startswith("datasets/"):
+        return Path(settings.BASE_DIR) / parsed_path
+
+    return Path(settings.DATASETS_ROOT) / parsed_path
+
+
+def _haversine_distance_meters(point_a, point_b):
+    if point_a is None or point_b is None:
+        return 0.0
+
+    lon1, lat1 = math.radians(float(point_a["lon"])), math.radians(float(point_a["lat"]))
+    lon2, lat2 = math.radians(float(point_b["lon"])), math.radians(float(point_b["lat"]))
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 6371000 * 2 * math.asin(math.sqrt(a))
+
+
+def _build_column_map(header_row):
+    aliases = {
+        "gpstime": ["gpstime", "time", "timestamp", "gps时间", "时间", "定位时间", "采集时间"],
+        "lon": ["lon", "longitude", "经度"],
+        "lat": ["lat", "latitude", "纬度"],
+        "x": ["x"],
+        "y": ["y"],
+        "velocity": ["velocity", "speed", "速度"],
+        "course": ["course", "航向", "方向角"],
+        "workstatus": ["workstatus", "status", "作业状态", "状态"],
+        "width": ["width", "幅宽", "作业幅宽"],
+        "depth": ["depth", "plowingdepth", "耕深", "深度"],
+        "depthstandard": ["depthstandard", "标准耕深", "耕深标准", "标准值"],
+    }
+
+    column_map = {}
+    normalized_headers = {_normalize_header(value): index for index, value in enumerate(header_row)}
+    for field_name, candidates in aliases.items():
+        for candidate in candidates:
+            candidate_key = _normalize_header(candidate)
+            if candidate_key in normalized_headers:
+                column_map[field_name] = normalized_headers[candidate_key]
+                break
+    return column_map
+
+
+def _parse_rows(rows, datemode=0):
+    parsed_rows = []
+    errors = []
+
+    for index, row in enumerate(rows, start=2):
+        point = {
+            "gpstime": None,
+            "lon": None,
+            "lat": None,
+            "x": None,
+            "y": None,
+            "velocity": None,
+            "course": None,
+            "workstatus": None,
+            "width": None,
+            "depth": None,
+            "depthstandard": None,
+        }
+
+        try:
+            if isinstance(row, dict):
+                row_map = { _normalize_header(key): value for key, value in row.items() }
+                for field_name, aliases in {
+                    "gpstime": ["gpstime", "time", "timestamp", "gps时间", "时间", "定位时间", "采集时间"],
+                    "lon": ["lon", "longitude", "经度"],
+                    "lat": ["lat", "latitude", "纬度"],
+                    "x": ["x"],
+                    "y": ["y"],
+                    "velocity": ["velocity", "speed", "速度"],
+                    "course": ["course", "航向", "方向角"],
+                    "workstatus": ["workstatus", "status", "作业状态", "状态"],
+                    "width": ["width", "幅宽", "作业幅宽"],
+                    "depth": ["depth", "plowingdepth", "耕深", "深度"],
+                    "depthstandard": ["depthstandard", "标准耕深", "耕深标准", "标准值"],
+                }.items():
+                    for alias in aliases:
+                        alias_key = _normalize_header(alias)
+                        if alias_key in row_map:
+                            point[field_name] = row_map[alias_key]
+                            break
+            else:
+                header_map = row[0]
+                values = row[1]
+                for field_name, column_index in header_map.items():
+                    if 0 <= column_index < len(values):
+                        point[field_name] = values[column_index]
+
+            point["gpstime"] = _parse_datetime_value(point["gpstime"], datemode)
+            point["lon"] = _parse_float(point["lon"])
+            point["lat"] = _parse_float(point["lat"])
+            point["x"] = _parse_float(point["x"])
+            point["y"] = _parse_float(point["y"])
+            point["velocity"] = _parse_float(point["velocity"])
+            point["course"] = _parse_float(point["course"])
+            point["workstatus"] = _parse_int(point["workstatus"])
+            point["width"] = _parse_float(point["width"])
+            point["depth"] = _parse_float(point["depth"])
+            point["depthstandard"] = _parse_float(point["depthstandard"])
+
+            if point["lon"] is not None and not (-180 <= point["lon"] <= 180):
+                errors.append(f"第{index}行经度异常，已跳过")
+                continue
+            if point["lat"] is not None and not (-90 <= point["lat"] <= 90):
+                errors.append(f"第{index}行纬度异常，已跳过")
+                continue
+            if point["gpstime"] is None or point["lon"] is None or point["lat"] is None:
+                errors.append(f"第{index}行关键字段缺失，已跳过")
+                continue
+
+            parsed_rows.append(point)
+        except Exception as exc:
+            errors.append(f"第{index}行解析失败: {exc}")
+
+    return parsed_rows, errors
+
+
+def parse_csv(file_path):
+    with open(file_path, "r", encoding="utf-8-sig", newline="") as handle:
+        sample = handle.read(4096)
+        handle.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample) if sample.strip() else csv.excel
+        except Exception:
+            dialect = csv.excel
+        reader = csv.DictReader(handle, dialect=dialect)
+        return _parse_rows(reader)
+
+
+def parse_excel(file_path):
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".xls":
+        workbook = xlrd.open_workbook(file_path)
+        sheet = workbook.sheet_by_index(0)
+        headers = [_normalize_header(sheet.cell_value(0, col_index)) for col_index in range(sheet.ncols)]
+        column_map = _build_column_map(headers)
+        rows = []
+        for row_index in range(1, sheet.nrows):
+            row_values = [sheet.cell_value(row_index, col_index) for col_index in range(sheet.ncols)]
+            row_dict = {}
+            for field_name, column_index in column_map.items():
+                row_dict[field_name] = row_values[column_index] if column_index < len(row_values) else None
+            rows.append(row_dict)
+        return _parse_rows(rows, datemode=workbook.datemode)
+
+    workbook = load_workbook(file_path, data_only=True)
+    sheet = workbook[workbook.sheetnames[0]]
+    header_values = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    column_map = _build_column_map(header_values)
+    rows = []
+    for row in sheet.iter_rows(min_row=2, values_only=True):
+        row_dict = {}
+        for field_name, column_index in column_map.items():
+            row_dict[field_name] = row[column_index] if column_index < len(row) else None
+        rows.append(row_dict)
+    return _parse_rows(rows)
+
+
+def _parse_track_file(file_path):
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".csv":
+        return parse_csv(file_path)
+    if suffix in {".xlsx", ".xls"}:
+        return parse_excel(file_path)
+    raise ValueError("仅支持 CSV / Excel 文件解析")
+
+
+def _save_import_log(admin_id, file_name, import_count, import_status, error_info):
+    return ImportLog.objects.create(
+        admin_id_id=admin_id,
+        file_name=file_name,
+        import_count=import_count,
+        import_status=import_status,
+        error_info=error_info or None,
+        import_time=timezone.now(),
+    )
 
 
 _USER_HAS_IS_DELETE = None
@@ -697,63 +955,208 @@ def file_update(request):
 
 
 @api_view(["POST"])
-def file_upload(request):
+def upload_file(request):
+    """Upload a single file and store it under BackEnd/datasets by type."""
     uploaded_file = request.FILES.get("file") or next(iter(request.FILES.values()), None)
     if uploaded_file is None:
-        return Response({"code": "400", "data": None, "msg": "未获取到上传文件"}, status=400)
+        return _json_response("未获取到上传文件", code=400, status=400)
 
-    # 先基于上传内容计算md5，命中则复用已有文件URL，避免重复落盘
-    md5_ctx = hashlib.md5()
-    for chunk in uploaded_file.chunks():
-        md5_ctx.update(chunk)
-    file_md5 = md5_ctx.hexdigest()
+    suffix = Path(uploaded_file.name).suffix.lower()
+    folder_map = {
+        ".xlsx": "xlsx",
+        ".xls": "xlsx",
+        ".csv": "csv",
+        ".png": "遥感图",
+        ".jpg": "遥感图",
+        ".jpeg": "遥感图",
+    }
+    target_folder = folder_map.get(suffix)
+    if not target_folder:
+        return _json_response("不支持的文件类型", code=400, status=400)
 
-    existed = _fetch_one(
-        """
-        SELECT id, url
-        FROM file
-        WHERE md5=%s AND IFNULL(is_delete,0)=0
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (file_md5,),
-    )
-    if existed and existed.get("url"):
-        return JsonResponse(existed.get("url"), safe=False)
+    target_dir = Path(settings.DATASETS_ROOT) / target_folder
+    target_dir.mkdir(parents=True, exist_ok=True)
 
-    uploaded_file.seek(0)
-
-    media_root = Path(settings.MEDIA_ROOT)
-    media_root.mkdir(parents=True, exist_ok=True)
-
-    original_name = uploaded_file.name
-    suffix = Path(original_name).suffix
     stored_name = f"{uuid.uuid4().hex}{suffix}"
-    file_path = media_root / stored_name
+    file_path = target_dir / stored_name
+    md5_ctx = hashlib.md5()
+    total_bytes = 0
 
-    with open(file_path, "wb+") as destination:
+    with open(file_path, "wb") as destination:
         for chunk in uploaded_file.chunks():
             destination.write(chunk)
+            md5_ctx.update(chunk)
+            total_bytes += len(chunk)
 
-    file_size_kb = round(file_path.stat().st_size / 1024, 2)
-    backend_public_url = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
-    file_url = f"{backend_public_url}{settings.MEDIA_URL}{stored_name}"
-
-    _execute(
-        """
-        INSERT INTO file(name, type, size, url, is_delete, enable, md5)
-        VALUES(%s, %s, %s, %s, 0, 1, %s)
-        """,
-        (
-            Path(original_name).stem,
-            suffix.lstrip(".").lower(),
-            file_size_kb,
-            file_url,
-            file_md5,
-        ),
+    relative_url = f"{settings.DATASETS_URL}{target_folder}/{stored_name}".replace("\\", "/")
+    file_record = DatasetFile.objects.create(
+        name=Path(uploaded_file.name).stem,
+        type=suffix.lstrip(".").lower(),
+        size=round(total_bytes / 1024, 2),
+        url=relative_url,
+        is_delete=False,
+        enable=True,
+        md5=md5_ctx.hexdigest(),
     )
 
-    return JsonResponse(file_url, safe=False)
+    response_data = {
+        "id": file_record.id,
+        "name": file_record.name,
+        "url": request.build_absolute_uri(relative_url),
+        "size": file_record.size,
+        "type": file_record.type,
+        "md5": file_record.md5,
+    }
+    return _json_response(data=response_data)
+
+
+@api_view(["POST"])
+def import_data(request):
+    """Import trajectory rows from an uploaded CSV / Excel file by file_id."""
+    file_id = request.data.get("file_id") or request.data.get("fileId") or request.data.get("id")
+    admin_id = request.data.get("admin_id") or request.data.get("adminId") or request.data.get("user_id") or 1
+
+    if not file_id:
+        return _json_response("缺少文件ID", code=400, status=400)
+
+    file_record = DatasetFile.objects.filter(id=file_id, is_delete=False).first()
+    if not file_record:
+        return _json_response("文件不存在或已删除", code=404, status=404)
+
+    file_path = _resolve_dataset_file(file_record.url)
+    if file_path is None or not file_path.exists():
+        return _json_response("文件路径不存在", code=404, status=404)
+
+    start_time = time.perf_counter()
+    parsed_rows, parse_errors = _parse_track_file(file_path)
+
+    if not parsed_rows:
+        error_text = "\n".join(parse_errors) if parse_errors else "未解析到有效数据"
+        _save_import_log(admin_id, file_record.name, 0, "fail", error_text)
+        return _json_response(
+            message="导入失败",
+            data={
+                "success_count": 0,
+                "failure_count": 0,
+                "cost_seconds": round(time.perf_counter() - start_time, 3),
+                "errors": parse_errors,
+            },
+            code=500,
+            status=500,
+        )
+
+    valid_points = []
+    for point in parsed_rows:
+        valid_points.append(point)
+
+    first_point = valid_points[0]
+    last_point = valid_points[-1]
+    track_width = next((item["width"] for item in valid_points if item.get("width") is not None), None)
+    if track_width is None:
+        track_width = 0.0
+
+    total_distance_m = 0.0
+    for index in range(1, len(valid_points)):
+        total_distance_m += _haversine_distance_meters(valid_points[index - 1], valid_points[index])
+
+    work_time_hours = 0.0
+    if first_point.get("gpstime") and last_point.get("gpstime"):
+        work_time_hours = max((last_point["gpstime"] - first_point["gpstime"]).total_seconds(), 0) / 3600.0
+
+    avg_velocity = round(mean([item["velocity"] for item in valid_points if item.get("velocity") is not None]) if any(item.get("velocity") is not None for item in valid_points) else 0.0, 3)
+    work_area = round((total_distance_m * float(track_width or 0.0)) / 10000.0, 3)
+    active_points = [item for item in valid_points if (item.get("workstatus") or 0) != 0]
+    pass_rate = round((len(active_points) / len(valid_points)) * 100.0, 2) if valid_points else 0.0
+    production_rate = round((work_area / work_time_hours), 3) if work_time_hours else 0.0
+    time_rate = round((len(active_points) / len(valid_points)) * 100.0, 2) if valid_points else 0.0
+
+    error_info = "\n".join(parse_errors) if parse_errors else None
+
+    try:
+        with transaction.atomic():
+            track = Track.objects.create(
+                starttime=first_point["gpstime"],
+                endtime=last_point["gpstime"],
+                width=float(track_width or 0.0),
+                totalpoints=len(valid_points),
+            )
+
+            trackpoints_objects = [
+                Trackpoints(
+                    trackid=track,
+                    gpstime=item["gpstime"],
+                    lon=item["lon"],
+                    lat=item["lat"],
+                    x=item.get("x"),
+                    y=item.get("y"),
+                    velocity=item.get("velocity"),
+                    course=item.get("course"),
+                    workstatus=item.get("workstatus"),
+                    width=item.get("width"),
+                    depth=item.get("depth"),
+                    depthstandard=item.get("depthstandard"),
+                )
+                for item in valid_points
+            ]
+            Trackpoints.objects.bulk_create(trackpoints_objects, batch_size=500)
+
+            Work.objects.create(
+                trackid=track,
+                worktime=round(work_time_hours, 3),
+                worklength=round(total_distance_m / 1000.0, 3),
+                workarea=work_area,
+                avgvelocity=avg_velocity,
+            )
+            Rate.objects.create(
+                trackid=track,
+                passrate=pass_rate,
+                productionrate=production_rate,
+                timerrate=time_rate,
+            )
+
+            import_log = _save_import_log(
+                admin_id,
+                file_record.name,
+                len(valid_points),
+                "success",
+                error_info,
+            )
+    except Exception as exc:
+        import_log = _save_import_log(
+            admin_id,
+            file_record.name,
+            len(valid_points),
+            "fail",
+            f"数据库写入失败: {exc}\n{error_info or ''}".strip(),
+        )
+        return _json_response(
+            message="导入失败",
+            data={
+                "import_log_id": import_log.id,
+                "success_count": 0,
+                "failure_count": len(parsed_rows),
+                "cost_seconds": round(time.perf_counter() - start_time, 3),
+                "errors": parse_errors + [str(exc)],
+            },
+            code=500,
+            status=500,
+        )
+
+    cost_seconds = round(time.perf_counter() - start_time, 3)
+    return _json_response(
+        data={
+            "track_id": track.trackid,
+            "import_log_id": import_log.id,
+            "success_count": len(valid_points),
+            "failure_count": len(parse_errors),
+            "cost_seconds": cost_seconds,
+            "errors": parse_errors,
+        },
+    )
+
+
+# Backward-compatible alias for existing routes and callers.
+file_upload = upload_file
 
 
 @api_view(["GET"])

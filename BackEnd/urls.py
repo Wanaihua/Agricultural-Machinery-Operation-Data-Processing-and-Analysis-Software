@@ -3,11 +3,12 @@ from django.conf.urls.static import static
 from django.urls import include, path
 from .views import (
     echarts_members,
+    import_data,
     file_delete,
     file_delete_batch,
     file_page,
     file_update,
-    file_upload,
+    upload_file,
     get_data,
     login_test,
     menu_delete,
@@ -39,6 +40,8 @@ from .views import (
 urlpatterns = [
     path('api/data/', get_data, name='get_data'),
     path('api/login-test/', login_test, name='login_test'),
+    path('api/upload-file/', upload_file, name='upload_file'),
+    path('api/import-data/', import_data, name='import_data'),
     path('api/', include('BackEnd.generated_api.urls')),
     path('user/login', user_login),
     path('user/register', user_register),
@@ -62,6 +65,6 @@ urlpatterns = [
     path('file/<int:file_id>', file_delete),
     path('file/deleteBatch', file_delete_batch),
     path('file/update', file_update),
-    path('file/upload', file_upload),
+    path('file/upload', upload_file),
     path('echarts/members', echarts_members),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(settings.DATASETS_URL, document_root=settings.DATASETS_ROOT)
