@@ -3,9 +3,14 @@
     <div class="page-head">
       <div>
         <div class="amod-page-title">轨迹列表</div>
-        <div class="amod-subtitle">支持按时间和幅宽筛选，点击轨迹可进入地图页</div>
       </div>
-      <el-button type="primary" @click="loadTracks">刷新数据</el-button>
+    </div>
+
+    <div class="toolbar-row">
+      <div class="action-group">
+        <el-button type="primary" @click="loadTracks">刷新数据</el-button>
+        <el-button type="warning" @click="goUploadPage">上传轨迹</el-button>
+      </div>
     </div>
 
     <el-card class="amod-card filter-card" shadow="never">
@@ -34,16 +39,35 @@
       </el-form>
     </el-card>
 
-    <el-card class="amod-card" shadow="never">
-      <el-table :data="pagedTracks" border stripe>
+    <el-card class="amod-card table-card" shadow="never">
+      <div class="batch-actions" v-if="selectedIds.length">
+        <span>已选 {{ selectedIds.length }} 项</span>
+        <el-button v-if="isAdmin" type="danger" size="small" @click="batchDelete">批量删除</el-button>
+        <el-button size="small" @click="toggleSelect">反选</el-button>
+        <el-button size="small" @click="clearSelection">取消选择</el-button>
+      </div>
+      <el-table
+        :data="pagedTracks"
+        border stripe
+        class="amod-table"
+        @selection-change="onSelectionChange"
+        ref="tableRef"
+      >
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="trackid" label="轨迹ID" width="100" />
+        <el-table-column label="文件名" width="120">
+          <template #default="{ row }">
+            {{ row.file_name ? row.file_name + '.xlsx' : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="starttime" label="起始时间" min-width="180" :formatter="formatStart" />
         <el-table-column prop="endtime" label="结束时间" min-width="180" :formatter="formatEnd" />
-        <el-table-column prop="width" label="幅宽" width="120" />
+        <el-table-column prop="width" label="幅宽" width="120" :formatter="formatWidth" />
         <el-table-column prop="totalpoints" label="总点数" width="120" />
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="scope">
             <el-button type="primary" link @click="goMap(scope.row.trackid)">查看轨迹</el-button>
+            <el-button v-if="isAdmin" type="danger" link @click="deleteTrack(scope.row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -65,14 +89,19 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import request from '@/utils/request'
-import { formatDateTime, unwrapListResponse } from '@/utils/response'
+import { formatDateTime, formatNumberFixed, unwrapListResponse } from '@/utils/response'
+import { getCurrentUser, isAdminUser } from '@/utils/auth'
 
 const router = useRouter()
 const tracks = ref([])
 const page = reactive({ current: 1, size: 10 })
 const filters = reactive({ timeRange: [], minWidth: undefined, maxWidth: undefined })
+const isAdmin = computed(() => isAdminUser(getCurrentUser()))
+const selectedIds = ref([])
+const tableRef = ref(null)
 
 const filteredTracks = computed(() => {
   return tracks.value.filter((item) => {
@@ -105,6 +134,10 @@ function formatEnd(row, column, value) {
   return formatDateTime(value)
 }
 
+function formatWidth(row, column, value) {
+  return formatNumberFixed(value, 4)
+}
+
 async function loadTracks() {
   const res = await request.get('/api/track/')
   tracks.value = unwrapListResponse(res)
@@ -135,7 +168,70 @@ function goMap(trackId) {
   router.push(`/track/map/${trackId}`)
 }
 
+async function deleteTrack(row) {
+  if (!isAdmin.value) {
+    ElMessage.warning('当前账号无删除权限')
+    return
+  }
+
+  const confirmed = confirm(`确认删除轨迹 ${row.trackid} 吗？此操作会同时删除轨迹点、作业统计和通行率数据。`)
+  if (!confirmed) return
+
+  try {
+    await request.delete(`/api/track/${row.trackid}/`)
+    ElMessage.success(`已删除轨迹 ${row.trackid}`)
+    await loadTracks()
+  } catch (error) {
+    console.error(error)
+    if (error?.response?.status === 404) {
+      ElMessage.warning(`轨迹 ${row.trackid} 已不存在，列表已刷新`)
+      await loadTracks()
+      return
+    }
+    ElMessage.error(error?.response?.data?.msg || error?.response?.data?.message || '删除失败')
+  }
+}
+
 onMounted(loadTracks)
+
+function goUploadPage() {
+  router.push('/data/import')
+}
+
+function onSelectionChange(rows) {
+  selectedIds.value = rows.map(r => r.trackid)
+}
+
+function toggleSelect() {
+  const table = tableRef.value
+  if (!table) return
+  pagedTracks.value.forEach(row => {
+    const isSelected = selectedIds.value.includes(row.trackid)
+    table.toggleRowSelection(row, !isSelected)
+  })
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
+}
+
+async function batchDelete() {
+  if (!isAdmin.value) {
+    ElMessage.warning('当前账号无删除权限')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${selectedIds.value.length} 条轨迹吗？`, '提示', { type: 'warning' })
+    for (const id of selectedIds.value) {
+      await request.delete(`/api/track/${id}/`)
+    }
+    ElMessage.success('批量删除成功')
+    clearSelection()
+    await loadTracks()
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error('删除失败')
+  }
+}
 </script>
 
 <style scoped>
@@ -145,20 +241,16 @@ onMounted(loadTracks)
   gap: 16px;
 }
 
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-}
-
 .filter-card {
   padding-bottom: 8px;
 }
 
-.pager-wrap {
+.batch-actions {
   display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--amod-text-soft);
 }
 </style>

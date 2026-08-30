@@ -3,16 +3,18 @@
     <div class="page-head">
       <div>
         <div class="amod-page-title">菜单管理</div>
-        <div class="amod-subtitle">维护侧边栏菜单与父子层级关系</div>
       </div>
+    </div>
+
+    <div class="toolbar-row">
       <div class="action-group">
         <el-input v-model="keyword" placeholder="搜索菜单名" clearable class="search-input" />
         <el-button type="primary" @click="openCreate">新增菜单</el-button>
       </div>
     </div>
 
-    <el-card class="amod-card" shadow="never">
-      <el-table :data="pagedMenus" border stripe row-key="id">
+    <el-card class="amod-card table-card" shadow="never">
+      <el-table :data="pagedMenus" border stripe row-key="id" class="amod-table">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="name" label="名称" min-width="140" />
         <el-table-column prop="path" label="路径" min-width="140" />
@@ -58,13 +60,13 @@
           <el-input v-model="form.page_path" placeholder="例如 TrackList" />
         </el-form-item>
         <el-form-item label="父级菜单" prop="pid">
-          <el-select v-model="form.pid" clearable placeholder="无父级" style="width: 100%">
+          <el-select v-model="form.pid" clearable placeholder="无父级" class="w-full">
             <el-option label="无父级" :value="null" />
             <el-option v-for="item in menus" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="图标" prop="icon">
-          <el-select v-model="form.icon" placeholder="请选择图标" style="width: 100%">
+          <el-select v-model="form.icon" placeholder="请选择图标" class="w-full">
             <el-option v-for="item in iconOptions" :key="item.value" :label="item.name" :value="item.value">
               <component :is="resolveIcon(item.value)" class="menu-icon" />
               <span class="icon-label">{{ item.name }}</span>
@@ -234,35 +236,6 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.crud-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-}
-
-.action-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.search-input {
-  width: 240px;
-}
-
-.pager-wrap {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-}
-
 .menu-icon {
   width: 1em;
   height: 1em;

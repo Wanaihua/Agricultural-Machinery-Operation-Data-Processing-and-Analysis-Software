@@ -1,7 +1,10 @@
 <template>
   <div class="amod-page home-page">
-    <div class="amod-page-title">系统概览</div>
-    <div class="amod-subtitle">轨迹、导入、人员和权限的统一入口</div>
+    <div class="page-head">
+      <div>
+        <div class="amod-page-title">系统概览</div>
+      </div>
+    </div>
 
     <el-row :gutter="16" class="metric-grid">
       <el-col v-for="item in metrics" :key="item.label" :xs="12" :sm="12" :md="6">
@@ -15,15 +18,15 @@
 
     <el-row :gutter="16" class="panel-grid">
       <el-col :xs="24" :lg="14">
-        <el-card class="amod-card" shadow="never">
+        <el-card class="amod-card table-card" shadow="never">
           <template #header>
             <div class="panel-title">最近轨迹</div>
           </template>
-          <el-table :data="recentTracks" border stripe>
+          <el-table :data="recentTracks" border stripe class="amod-table">
             <el-table-column prop="trackid" label="轨迹ID" width="100" />
             <el-table-column prop="starttime" label="起始时间" :formatter="formatStart" />
             <el-table-column prop="endtime" label="结束时间" :formatter="formatEnd" />
-            <el-table-column prop="width" label="幅宽" width="100" />
+            <el-table-column prop="width" label="幅宽" width="100" :formatter="formatWidth" />
             <el-table-column prop="totalpoints" label="总点数" width="100" />
           </el-table>
         </el-card>
@@ -50,20 +53,19 @@
     </el-row>
   </div>
 </template>
-
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import request from '@/utils/request'
-import { formatDateTime, unwrapListResponse } from '@/utils/response'
+import { formatDateTime, formatNumberFixed, unwrapListResponse } from '@/utils/response'
 
 const counts = ref({ tracks: 0, users: 0, roles: 0, files: 0 })
 const recentTracks = ref([])
 
 const metrics = computed(() => [
-  { label: '轨迹总数', value: counts.value.tracks, hint: '来自 /api/track/' },
-  { label: '用户总数', value: counts.value.users, hint: '来自 /api/user/' },
-  { label: '角色总数', value: counts.value.roles, hint: '来自 /api/role/' },
-  { label: '文件总数', value: counts.value.files, hint: '来自 /api/file/' },
+  { label: '轨迹总数', value: counts.value.tracks },
+  { label: '用户总数', value: counts.value.users },
+  { label: '角色总数', value: counts.value.roles },
+  { label: '文件总数', value: counts.value.files },
 ])
 
 async function loadDashboard() {
@@ -92,6 +94,10 @@ function formatEnd(row, column, cellValue) {
   return formatDateTime(cellValue)
 }
 
+function formatWidth(row, column, cellValue) {
+  return formatNumberFixed(cellValue, 4)
+}
+
 onMounted(loadDashboard)
 </script>
 
@@ -99,6 +105,13 @@ onMounted(loadDashboard)
 .home-page {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
   gap: 16px;
 }
 

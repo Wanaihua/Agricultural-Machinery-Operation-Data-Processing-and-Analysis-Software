@@ -3,16 +3,18 @@
     <div class="page-head">
       <div>
         <div class="amod-page-title">角色管理</div>
-        <div class="amod-subtitle">可维护角色基础信息并分配菜单权限</div>
       </div>
+    </div>
+
+    <div class="toolbar-row">
       <div class="action-group">
         <el-input v-model="keyword" placeholder="搜索角色名" clearable class="search-input" />
         <el-button type="primary" @click="openCreate">新增角色</el-button>
       </div>
     </div>
 
-    <el-card class="amod-card" shadow="never">
-      <el-table :data="pagedRoles" border stripe>
+    <el-card class="amod-card table-card" shadow="never">
+      <el-table :data="pagedRoles" border stripe class="amod-table">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="name" label="角色名称" min-width="140" />
         <el-table-column prop="flag" label="标识" min-width="120" />
@@ -56,14 +58,14 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="permissionVisible" title="菜单权限分配" width="640px">
+      <el-dialog v-model="permissionVisible" title="菜单权限分配" width="640px" destroy-on-close>
       <el-tree
+        :key="permissionTreeKey"
         ref="treeRef"
         :data="menuTree"
         node-key="id"
         show-checkbox
         :default-expanded-keys="expandedKeys"
-        :default-checked-keys="checkedKeys"
         :props="treeProps"
       />
 
@@ -76,7 +78,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { unwrapListResponse } from '@/utils/response'
@@ -94,6 +96,7 @@ const menuTree = ref([])
 const checkedKeys = ref([])
 const expandedKeys = ref([])
 const currentRoleId = ref(null)
+const permissionTreeKey = ref(0)
 
 const treeProps = { children: 'children', label: 'name' }
 const form = reactive({ id: null, name: '', flag: '', description: '' })
@@ -139,11 +142,30 @@ async function loadRoles() {
 }
 
 async function loadMenuTree() {
-  // use legacy `/menu` endpoint which returns a nested tree structure
-  const res = await request.get('/menu')
-  // the custom /menu returns nested children, keep as-is
-  menuTree.value = Array.isArray(res.data) ? res.data : unwrapListResponse(res)
+  const res = await request.get('/api/menu/')
+  const flatMenus = unwrapListResponse(res)
+  menuTree.value = buildMenuTree(flatMenus)
   expandedKeys.value = flattenTreeIds(menuTree.value)
+}
+
+function buildMenuTree(items = []) {
+  const map = new Map()
+  const roots = []
+
+  items.forEach((item) => {
+    map.set(item.id, { ...item, children: [] })
+  })
+
+  map.forEach((node) => {
+    const pid = node.pid && typeof node.pid === 'object' ? node.pid.id : node.pid
+    if (pid && map.has(pid)) {
+      map.get(pid).children.push(node)
+    } else {
+      roots.push(node)
+    }
+  })
+
+  return roots
 }
 
 function flattenTreeIds(tree = []) {
@@ -194,55 +216,83 @@ async function removeRole(id) {
 
 async function openPermission(row) {
   currentRoleId.value = row.id
+  checkedKeys.value = []
+  expandedKeys.value = []
+  permissionTreeKey.value += 1
   permissionVisible.value = true
   await loadMenuTree()
 
   const res = await request.get(`/role/roleMenu/${row.id}`)
-  checkedKeys.value = (Array.isArray(res.data) ? res.data : unwrapListResponse(res)).map((item) => String(item))
+  const selectedIds = (Array.isArray(res.data) ? res.data : unwrapListResponse(res))
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item))
+  checkedKeys.value = selectedIds.map((item) => String(item))
+  await nextTick()
+  treeRef.value?.setCheckedKeys(selectedIds)
 }
 
 async function savePermissions() {
   savingPermission.value = true
   try {
-    const keys = treeRef.value?.getCheckedKeys(false) || []
+    const keys = Array.from(new Set((treeRef.value?.getCheckedKeys(false) || [])
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item))))
     await request.post(`/role/roleMenu/${currentRoleId.value}`, keys)
     ElMessage.success('权限已保存')
     permissionVisible.value = false
+    await refreshCurrentUserMenus()
   } finally {
     savingPermission.value = false
   }
+}
+
+async function refreshCurrentUserMenus() {
+  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const currentRoleKey = String(user.role?.flag || user.role?.name || user.role || '').toLowerCase()
+  if (!currentRoleKey) {
+    return
+  }
+
+  const roleRes = await request.get('/api/role/')
+  const rolesList = unwrapListResponse(roleRes)
+  const currentRole = rolesList.find((item) => String(item.flag || item.name || '').toLowerCase() === currentRoleKey)
+  if (!currentRole || String(currentRole.id) !== String(currentRoleId.value)) {
+    return
+  }
+
+  const [menuRes, roleMenuRes] = await Promise.all([
+    request.get('/api/menu/'),
+    request.get(`/role/roleMenu/${currentRole.id}`),
+  ])
+  const allMenus = unwrapListResponse(menuRes)
+  const selectedIds = new Set((Array.isArray(roleMenuRes.data) ? roleMenuRes.data : unwrapListResponse(roleMenuRes)).map((item) => Number(item)))
+  const menuMap = new Map(allMenus.map((item) => [Number(item.id), item]))
+  const visibleIds = new Set()
+
+  function includeAncestors(menuId) {
+    const numericId = Number(menuId)
+    if (!numericId || visibleIds.has(numericId)) {
+      return
+    }
+    const menu = menuMap.get(numericId)
+    if (!menu) {
+      return
+    }
+    visibleIds.add(numericId)
+    const pid = menu.pid && typeof menu.pid === 'object' ? menu.pid.id : menu.pid
+    if (pid) {
+      includeAncestors(pid)
+    }
+  }
+
+  selectedIds.forEach((menuId) => includeAncestors(menuId))
+  const visibleMenus = allMenus.filter((item) => visibleIds.has(Number(item.id)))
+  localStorage.setItem('menus', JSON.stringify(buildMenuTree(visibleMenus)))
+  window.dispatchEvent(new Event('menus-updated'))
 }
 
 onMounted(loadRoles)
 </script>
 
 <style scoped>
-.crud-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-}
-
-.action-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.search-input {
-  width: 240px;
-}
-
-.pager-wrap {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-}
 </style>

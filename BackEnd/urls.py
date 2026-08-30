@@ -1,9 +1,11 @@
 from django.conf import settings
 from django.conf.urls.static import static
-from django.urls import include, path
+from django.urls import include, path, re_path
 from .views import (
     echarts_members,
     import_data,
+    import_datasets_all,
+    import_file,
     file_delete,
     file_delete_batch,
     file_page,
@@ -35,14 +37,28 @@ from .views import (
     user_register,
     user_update_password,
     user_save,
+    upload_template,
 )
+from BackEnd.analysis.api import (
+    analyze_track_workload,
+    analyze_all_tracks_workload,
+    get_workload_summary_view,
+)
+from BackEnd.views_frontend import serve_frontend
  
 urlpatterns = [
     path('api/data/', get_data, name='get_data'),
     path('api/login-test/', login_test, name='login_test'),
     path('api/upload-file/', upload_file, name='upload_file'),
+    path('api/import-file/', import_file, name='import_file'),
     path('api/import-data/', import_data, name='import_data'),
+    path('api/import-datasets-all/', import_datasets_all, name='import_datasets_all'),
+    path('api/upload-template/', upload_template, name='upload_template'),
     path('api/', include('BackEnd.generated_api.urls')),
+    # 农机作业量统计分析API
+    path('api/analysis/track/<int:track_id>/', analyze_track_workload, name='analyze_track_workload'),
+    path('api/analysis/all-tracks/', analyze_all_tracks_workload, name='analyze_all_tracks_workload'),
+    path('api/analysis/summary/', get_workload_summary_view, name='get_workload_summary'),
     path('user/login', user_login),
     path('user/register', user_register),
     path('user/username/<str:username>', user_by_username),
@@ -67,4 +83,6 @@ urlpatterns = [
     path('file/update', file_update),
     path('file/upload', upload_file),
     path('echarts/members', echarts_members),
+    # Vue3 SPA — 放在最后，作为兜底路由
+    re_path(r'^(?!api/|images/|datasets/|static/|user/|role/|menu/|file/|echarts/).*$', serve_frontend),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(settings.DATASETS_URL, document_root=settings.DATASETS_ROOT)

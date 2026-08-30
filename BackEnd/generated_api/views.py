@@ -72,6 +72,13 @@ class TrackViewSet(viewsets.ModelViewSet):
         serializer = TrackpointsSerializer(track.trackpoints.all(), many=True)
         return Response(serializer.data)
 
+    def destroy(self, request, *args, **kwargs):
+        track = self.get_object()
+        Trackpoints.objects.filter(trackid=track).delete()
+        Work.objects.filter(trackid=track).delete()
+        Rate.objects.filter(trackid=track).delete()
+        return super().destroy(request, *args, **kwargs)
+
 
 class TrackpointsViewSet(viewsets.ModelViewSet):
     queryset = Trackpoints.objects.select_related('trackid').all()

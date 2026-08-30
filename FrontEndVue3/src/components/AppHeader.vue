@@ -31,6 +31,8 @@
 
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item @click="goPersonInfo">个人信息</el-dropdown-item>
+            <el-dropdown-item @click="goUpdatePassword">修改密码</el-dropdown-item>
             <el-dropdown-item @click="$emit('logout')">退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -41,7 +43,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, Expand, Fold } from '@element-plus/icons-vue'
 
 defineProps({
@@ -54,6 +56,7 @@ defineProps({
 defineEmits(['toggle-collapse', 'logout'])
 
 const route = useRoute()
+const router = useRouter()
 const user = JSON.parse(localStorage.getItem('user') || '{}')
 
 const username = computed(() => user.username || '未登录用户')
@@ -61,6 +64,14 @@ const nickname = computed(() => user.nickname || user.username || '未命名')
 const avatarUrl = computed(() => user.avatar_url || user.avatarUrl || '')
 const roleName = computed(() => user.role?.name || user.roleName || user.role || '访客')
 const currentTitle = computed(() => route.meta.title || route.name || '工作台')
+
+function goUpdatePassword() {
+  router.push('/update-password')
+}
+
+function goPersonInfo() {
+  router.push('/person-info')
+}
 </script>
 
 <style scoped>

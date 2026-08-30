@@ -51,8 +51,8 @@ def import_all(db_path: Path, csv_dir: Path):
                 course = float(r[7]) if len(r) > 7 and r[7] else None
                 workstatus = 1 if (len(r) > 8 and (r[8].strip().upper() in ('TRUE','1','T')) ) else 0
                 width = float(r[9]) if len(r) > 9 and r[9] else None
-                depth = int(r[10]) if len(r) > 10 and r[10] else None
-                depthstandard = int(r[11]) if len(r) > 11 and r[11] else None
+                depth = float(r[10]) if len(r) > 10 and r[10] else None
+                depthstandard = float(r[11]) if len(r) > 11 and r[11] else None
             except Exception:
                 gpstime = None
                 lon = lat = x = y = velocity = course = None

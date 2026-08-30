@@ -35,3 +35,16 @@ export function formatDateTime(value) {
   const pad = (number) => String(number).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
+
+export function formatNumberFixed(value, digits = 4) {
+  if (value === null || value === undefined || value === '') {
+    return '--'
+  }
+
+  const number = Number(value)
+  if (Number.isNaN(number)) {
+    return String(value)
+  }
+
+  return number.toFixed(digits)
+}

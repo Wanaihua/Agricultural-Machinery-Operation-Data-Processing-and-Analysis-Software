@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+.DS_Store
+*.local
+
+# Django
+db.sqlite3
+*.log
+
+# Datasets & uploads
+datasets/
+images/*.pptx
+images/*.mp4
+images/*.png
+images/*.jpg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Deployment package
+AMOD-部署/
+AMOD-部署包/
+AMOD-部署包.zip

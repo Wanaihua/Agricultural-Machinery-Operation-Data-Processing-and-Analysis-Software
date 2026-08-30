@@ -3,23 +3,27 @@ import csv
 import math
 import os
 import re
+import sqlite3
 import uuid
 import time
 from datetime import datetime
+from io import BytesIO
 from statistics import mean
 from pathlib import Path
 from urllib.parse import urlparse
 
-import pymysql
 from django.conf import settings
 from django.db import transaction
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from openpyxl import load_workbook
+from openpyxl import Workbook
 import xlrd
+import subprocess
+import sys
 
 from BackEnd.generated_api.models import File as DatasetFile
 from BackEnd.generated_api.models import ImportLog, Rate, Track, Trackpoints, Work
@@ -33,25 +37,27 @@ def fail(msg="failed", code="500", data=None):
     return Response({"code": str(code), "data": data, "msg": msg})
 
 
-def _db_conf():
-    return {
-        "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
-        "port": int(os.getenv("MYSQL_PORT", "3306")),
-        "user": os.getenv("MYSQL_USER", "root"),
-        "password": os.getenv("MYSQL_PASSWORD", "wanaihua"),
-        "database": os.getenv("MYSQL_DB", "agricultural_machinery_db"),
-        "charset": "utf8mb4",
-        "cursorclass": pymysql.cursors.DictCursor,
-        "autocommit": True,
-    }
+def _db_path():
+    return Path(settings.DATABASES["default"]["NAME"])
+
+
+def _translate_sql(sql):
+    return sql.replace("%s", "?")
+
+
+def _connect_db():
+    conn = sqlite3.connect(str(_db_path()))
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _fetch_all(sql, params=None):
-    conn = pymysql.connect(**_db_conf())
+    conn = _connect_db()
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, params or ())
-            return cursor.fetchall()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute(_translate_sql(sql), params or ())
+            return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
 
@@ -62,11 +68,69 @@ def _fetch_one(sql, params=None):
 
 
 def _execute(sql, params=None):
-    conn = pymysql.connect(**_db_conf())
+    conn = _connect_db()
     try:
-        with conn.cursor() as cursor:
-            count = cursor.execute(sql, params or ())
+        with conn:
+            cursor = conn.cursor()
+            count = cursor.execute(_translate_sql(sql), params or ())
+            conn.commit()
             return count
+    finally:
+        conn.close()
+
+
+def _normalize_menu_ids(payload):
+    if isinstance(payload, dict):
+        for key in ("menu_ids", "menuIds", "ids", "keys"):
+            if key in payload:
+                payload = payload.get(key)
+                break
+
+    if payload is None:
+        return []
+    if not isinstance(payload, (list, tuple, set)):
+        payload = [payload]
+
+    menu_ids = []
+    seen = set()
+    for item in payload:
+        try:
+            menu_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if menu_id in seen:
+            continue
+        seen.add(menu_id)
+        menu_ids.append(menu_id)
+    return menu_ids
+
+
+def _replace_role_menu_entries(role_id, payload):
+    menu_ids = _normalize_menu_ids(payload)
+    conn = _connect_db()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute(_translate_sql("DELETE FROM role_menu WHERE role_id=%s"), (role_id,))
+            if not menu_ids:
+                conn.commit()
+                return
+            # filter to existing menu ids to avoid FK constraint errors
+            placeholders = ",".join(["?"] * len(menu_ids))
+            cursor.execute(f"SELECT id FROM menu WHERE id IN ({placeholders})", tuple(menu_ids))
+            rows = cursor.fetchall()
+            existing_ids = {int(r["id"]) for r in rows}
+            for menu_id in menu_ids:
+                if menu_id not in existing_ids:
+                    continue
+                cursor.execute(
+                    _translate_sql("INSERT INTO role_menu(role_id, menu_id) VALUES(%s, %s)"),
+                    (role_id, menu_id),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -113,6 +177,11 @@ def _parse_float(value):
     if value in (None, ""):
         return None
     try:
+        if isinstance(value, str):
+          text = value.strip().replace('，', ',')
+          if ',' in text and '.' not in text:
+              text = text.replace(',', '.')
+          return float(text)
         return float(value)
     except (TypeError, ValueError):
         return None
@@ -188,12 +257,12 @@ def _build_column_map(header_row):
         "lat": ["lat", "latitude", "纬度"],
         "x": ["x"],
         "y": ["y"],
-        "velocity": ["velocity", "speed", "速度"],
+        "velocity": ["velocity", "speed", "速度km/h", "速度"],
         "course": ["course", "航向", "方向角"],
-        "workstatus": ["workstatus", "status", "作业状态", "状态"],
-        "width": ["width", "幅宽", "作业幅宽"],
-        "depth": ["depth", "plowingdepth", "耕深", "深度"],
-        "depthstandard": ["depthstandard", "标准耕深", "耕深标准", "标准值"],
+        "workstatus": ["workstatus", "status", "作业状态", "工作状态", "状态"],
+        "width": ["width", "幅宽m", "幅宽", "作业幅宽"],
+        "depth": ["depth", "plowingdepth", "耕深mm", "耕深", "深度", "深度mm"],
+        "depthstandard": ["depthstandard", "标准耕深", "耕深标准值", "耕深标准", "标准值", "深度标准值"],
     }
 
     column_map = {}
@@ -235,12 +304,12 @@ def _parse_rows(rows, datemode=0):
                     "lat": ["lat", "latitude", "纬度"],
                     "x": ["x"],
                     "y": ["y"],
-                    "velocity": ["velocity", "speed", "速度"],
+                    "velocity": ["velocity", "speed", "速度km/h", "速度"],
                     "course": ["course", "航向", "方向角"],
-                    "workstatus": ["workstatus", "status", "作业状态", "状态"],
-                    "width": ["width", "幅宽", "作业幅宽"],
-                    "depth": ["depth", "plowingdepth", "耕深", "深度"],
-                    "depthstandard": ["depthstandard", "标准耕深", "耕深标准", "标准值"],
+                    "workstatus": ["workstatus", "status", "作业状态", "工作状态", "状态"],
+                    "width": ["width", "幅宽m", "幅宽", "作业幅宽"],
+                    "depth": ["depth", "plowingdepth", "耕深mm", "耕深", "深度"],
+                    "depthstandard": ["depthstandard", "标准耕深", "耕深标准值", "耕深标准", "标准值"],
                 }.items():
                     for alias in aliases:
                         alias_key = _normalize_header(alias)
@@ -320,6 +389,8 @@ def parse_excel(file_path):
         row_dict = {}
         for field_name, column_index in column_map.items():
             row_dict[field_name] = row[column_index] if column_index < len(row) else None
+        if row_dict.get('width') is None and len(row) > 9:
+            row_dict['width'] = row[9]
         rows.append(row_dict)
     return _parse_rows(rows)
 
@@ -352,15 +423,15 @@ def _user_has_is_delete():
     if _USER_HAS_IS_DELETE is not None:
         return _USER_HAS_IS_DELETE
 
-    row = _fetch_one(
-        """
-        SELECT COUNT(*) AS cnt
-        FROM information_schema.columns
-        WHERE table_schema = %s AND table_name = 'user' AND column_name = 'is_delete'
-        """,
-        (_db_conf()["database"],),
-    )
-    _USER_HAS_IS_DELETE = bool(row and row.get("cnt", 0) > 0)
+    conn = _connect_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(user)")
+        rows = cursor.fetchall()
+        columns = {str(row[1]).lower() for row in rows}
+        _USER_HAS_IS_DELETE = "is_delete" in columns
+    finally:
+        conn.close()
     return _USER_HAS_IS_DELETE
  
 @api_view(['GET'])
@@ -373,31 +444,10 @@ def get_data(request):
 def login_test(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    db_host = os.getenv('MYSQL_HOST', '127.0.0.1')
-    db_port = int(os.getenv('MYSQL_PORT', '3306'))
-    db_user = os.getenv('MYSQL_USER', 'root')
-    db_password = os.getenv('MYSQL_PASSWORD', 'wanaihua')
-    db_name = os.getenv('MYSQL_DB', 'agricultural_machinery_db')
-
-    conn = None
-
     try:
-        conn = pymysql.connect(
-            host=db_host,
-            port=db_port,
-            user=db_user,
-            password=db_password,
-            database=db_name,
-            charset='utf8mb4',
-            cursorclass=pymysql.cursors.DictCursor,
-        )
-        with conn.cursor() as cursor:
-            cursor.execute('SELECT 1')
+        _fetch_one('SELECT 1')
     except Exception as exc:
         return Response({'ok': False, 'connected': False, 'error': str(exc)}, status=500)
-    finally:
-        if conn is not None:
-            conn.close()
 
     if not username or not password:
         return Response({'ok': False, 'connected': True, 'message': 'username/password required'}, status=400)
@@ -405,31 +455,18 @@ def login_test(request):
     md5_password = hashlib.md5(password.encode('utf-8')).hexdigest()
 
     try:
-        conn = pymysql.connect(
-            host=db_host,
-            port=db_port,
-            user=db_user,
-            password=db_password,
-            database=db_name,
-            charset='utf8mb4',
-            cursorclass=pymysql.cursors.DictCursor,
+        active_filter = "AND IFNULL(is_delete, 0) = 0" if _user_has_is_delete() else ""
+        user = _fetch_one(
+            f"""
+            SELECT id, role
+            FROM user
+            WHERE username = %s AND LOWER(password) = %s {active_filter}
+            LIMIT 1
+            """,
+            (username, md5_password),
         )
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id, role
-                FROM user_info
-                WHERE username = %s AND LOWER(password) = %s AND IFNULL(is_delete, 0) = 0
-                LIMIT 1
-                """,
-                (username, md5_password),
-            )
-            user = cursor.fetchone()
     except Exception as exc:
         return Response({'ok': False, 'connected': False, 'error': str(exc)}, status=500)
-    finally:
-        if conn is not None:
-            conn.close()
 
     if user:
         return Response({'ok': True, 'connected': True, 'user_id': user['id'], 'role': user['role']})
@@ -458,8 +495,8 @@ def user_login(request):
     if not user:
         return fail("用户名或密码错误", code="401")
 
-    role_flag = user.get("role")
-    menus_sql = """
+    role_value = user.get("role")
+    menus_sql_by_flag = """
     SELECT m.id, m.name, m.path, m.icon, m.description, m.pid, m.page_path AS pagePath
     FROM menu m
     JOIN role_menu rm ON rm.menu_id = m.id
@@ -467,7 +504,26 @@ def user_login(request):
     WHERE r.flag = %s
     ORDER BY m.id
     """
-    menus = _fetch_all(menus_sql, (role_flag,)) if role_flag else []
+    menus_sql_by_role_id = """
+    SELECT m.id, m.name, m.path, m.icon, m.description, m.pid, m.page_path AS pagePath
+    FROM menu m
+    JOIN role_menu rm ON rm.menu_id = m.id
+    WHERE rm.role_id = %s
+    ORDER BY m.id
+    """
+    menus = []
+    if role_value:
+        try:
+            role_id = int(role_value)
+        except (TypeError, ValueError):
+            role_id = None
+
+        if role_id is not None:
+            menus = _fetch_all(menus_sql_by_role_id, (role_id,))
+
+        if not menus:
+            menus = _fetch_all(menus_sql_by_flag, (role_value,))
+
     user["menus"] = _build_menu_tree(menus)
     user["token"] = str(uuid.uuid4())
     return ok(user, "登录成功")
@@ -744,10 +800,7 @@ def role_delete_batch(request):
 
 @api_view(["POST"])
 def role_role_menu_save(request, role_id):
-    menu_ids = request.data or []
-    _execute("DELETE FROM role_menu WHERE role_id=%s", (role_id,))
-    for menu_id in menu_ids:
-        _execute("INSERT INTO role_menu(role_id, menu_id) VALUES(%s, %s)", (role_id, menu_id))
+    _replace_role_menu_entries(role_id, request.data)
     return ok(True, "保存成功")
 
 
@@ -757,10 +810,7 @@ def role_role_menu_entry(request, role_id):
         rows = _fetch_all("SELECT menu_id FROM role_menu WHERE role_id=%s", (role_id,))
         return ok([row["menu_id"] for row in rows])
 
-    menu_ids = request.data or []
-    _execute("DELETE FROM role_menu WHERE role_id=%s", (role_id,))
-    for menu_id in menu_ids:
-        _execute("INSERT INTO role_menu(role_id, menu_id) VALUES(%s, %s)", (role_id, menu_id))
+    _replace_role_menu_entries(role_id, request.data)
     return ok(True, "保存成功")
 
 
@@ -966,37 +1016,54 @@ def upload_file(request):
         ".xlsx": "xlsx",
         ".xls": "xlsx",
         ".csv": "csv",
-        ".png": "遥感图",
-        ".jpg": "遥感图",
-        ".jpeg": "遥感图",
+        ".png": "picture",
+        ".jpg": "picture",
+        ".jpeg": "picture",
     }
     target_folder = folder_map.get(suffix)
     if not target_folder:
         return _json_response("不支持的文件类型", code=400, status=400)
 
+    # 先计算MD5，检查是否已存在相同文件
+    md5_ctx = hashlib.md5()
+    for chunk in uploaded_file.chunks():
+        md5_ctx.update(chunk)
+    file_md5 = md5_ctx.hexdigest()
+
+    existing = DatasetFile.objects.filter(md5=file_md5, is_delete=False).first()
+    if existing:
+        response_data = {
+            "id": existing.id,
+            "name": existing.name,
+            "url": request.build_absolute_uri(existing.url),
+            "size": existing.size,
+            "type": existing.type,
+            "md5": existing.md5,
+            "duplicate": True,
+        }
+        return _json_response(data=response_data)
+
+    # 文件不存在，保存新文件
     target_dir = Path(settings.DATASETS_ROOT) / target_folder
     target_dir.mkdir(parents=True, exist_ok=True)
 
     stored_name = f"{uuid.uuid4().hex}{suffix}"
     file_path = target_dir / stored_name
-    md5_ctx = hashlib.md5()
-    total_bytes = 0
 
     with open(file_path, "wb") as destination:
+        uploaded_file.seek(0)
         for chunk in uploaded_file.chunks():
             destination.write(chunk)
-            md5_ctx.update(chunk)
-            total_bytes += len(chunk)
 
     relative_url = f"{settings.DATASETS_URL}{target_folder}/{stored_name}".replace("\\", "/")
     file_record = DatasetFile.objects.create(
         name=Path(uploaded_file.name).stem,
         type=suffix.lstrip(".").lower(),
-        size=round(total_bytes / 1024, 2),
+        size=round(uploaded_file.size / 1024, 2),
         url=relative_url,
         is_delete=False,
         enable=True,
-        md5=md5_ctx.hexdigest(),
+        md5=file_md5,
     )
 
     response_data = {
@@ -1007,7 +1074,137 @@ def upload_file(request):
         "type": file_record.type,
         "md5": file_record.md5,
     }
+
     return _json_response(data=response_data)
+
+
+@api_view(['POST'])
+def import_file(request):
+    """单独导入已上传的文件，返回导入结果"""
+    file_id = request.data.get("file_id")
+    print(f"[import_file] file_id={file_id}, data={request.data}")
+    if not file_id:
+        return _json_response("缺少 file_id", code=400, status=400)
+
+    try:
+        file_record = DatasetFile.objects.get(id=file_id, is_delete=False)
+    except DatasetFile.DoesNotExist:
+        return _json_response("文件不存在", code=404, status=404)
+
+    suffix = Path(file_record.name).suffix.lower() or f".{file_record.type}"
+    if suffix not in {".xlsx", ".xls", ".csv"}:
+        return _json_response("仅支持 xlsx/xls/csv 文件导入", code=400, status=400)
+
+    admin_id = request.data.get("admin_id") or request.data.get("adminId") or request.data.get("user_id") or 1
+    ok, import_result = _do_import_track(file_record, admin_id)
+    return _json_response(data=import_result)
+
+
+def _do_import_track(file_record, admin_id=1):
+    """导入轨迹数据到数据库，返回 (ok, result_dict)"""
+    file_path = _resolve_dataset_file(file_record.url)
+    if file_path is None or not file_path.exists():
+        return False, {"message": "文件路径不存在"}
+
+    start_time = time.perf_counter()
+    parsed_rows, parse_errors = _parse_track_file(file_path)
+
+    if not parsed_rows:
+        error_text = "\n".join(parse_errors) if parse_errors else "未解析到有效数据"
+        _save_import_log(admin_id, file_record.name, 0, "fail", error_text)
+        return False, {"message": "导入失败", "errors": parse_errors}
+
+    valid_points = list(parsed_rows)
+    first_point = valid_points[0]
+    last_point = valid_points[-1]
+    track_width = next((item["width"] for item in valid_points if item.get("width") is not None), None)
+    if track_width is None:
+        track_width = 0.0
+
+    total_distance_m = 0.0
+    for index in range(1, len(valid_points)):
+        total_distance_m += _haversine_distance_meters(valid_points[index - 1], valid_points[index])
+
+    work_time_hours = 0.0
+    if first_point.get("gpstime") and last_point.get("gpstime"):
+        work_time_hours = max((last_point["gpstime"] - first_point["gpstime"]).total_seconds(), 0) / 3600.0
+
+    avg_velocity = round(mean([item["velocity"] for item in valid_points if item.get("velocity") is not None]) if any(item.get("velocity") is not None for item in valid_points) else 0.0, 3)
+    work_area = round((total_distance_m * float(track_width or 0.0)) / 10000.0, 3)
+    active_points = [item for item in valid_points if (item.get("workstatus") or 0) != 0]
+    pass_rate = round((len(active_points) / len(valid_points)) * 100.0, 2) if valid_points else 0.0
+    production_rate = round((work_area / work_time_hours), 3) if work_time_hours else 0.0
+    time_rate = round((len(active_points) / len(valid_points)) * 100.0, 2) if valid_points else 0.0
+
+    error_info = "\n".join(parse_errors) if parse_errors else None
+
+    try:
+        with transaction.atomic():
+            track = Track.objects.create(
+                starttime=first_point["gpstime"],
+                endtime=last_point["gpstime"],
+                width=float(track_width or 0.0),
+                totalpoints=len(valid_points),
+            )
+
+            trackpoints_objects = [
+                Trackpoints(
+                    trackid=track,
+                    gpstime=item["gpstime"],
+                    lon=item["lon"],
+                    lat=item["lat"],
+                    x=item.get("x"),
+                    y=item.get("y"),
+                    velocity=item.get("velocity"),
+                    course=item.get("course"),
+                    workstatus=item.get("workstatus"),
+                    width=item.get("width"),
+                    depth=item.get("depth"),
+                    depthstandard=item.get("depthstandard"),
+                )
+                for item in valid_points
+            ]
+            Trackpoints.objects.bulk_create(trackpoints_objects, batch_size=500)
+
+            Work.objects.create(
+                trackid=track,
+                worktime=round(work_time_hours, 3),
+                worklength=round(total_distance_m / 1000.0, 3),
+                workarea=work_area,
+                avgvelocity=avg_velocity,
+            )
+            Rate.objects.create(
+                trackid=track,
+                passrate=pass_rate,
+                productionrate=production_rate,
+                timerrate=time_rate,
+            )
+
+            import_log = _save_import_log(
+                admin_id,
+                file_record.name,
+                len(valid_points),
+                "success",
+                error_info,
+            )
+    except Exception as exc:
+        import_log = _save_import_log(
+            admin_id,
+            file_record.name,
+            len(valid_points),
+            "fail",
+            f"数据库写入失败: {exc}\n{error_info or ''}".strip(),
+        )
+        return False, {"message": "导入失败", "errors": [str(exc)]}
+
+    cost_seconds = round(time.perf_counter() - start_time, 3)
+    return True, {
+        "track_id": track.trackid,
+        "import_log_id": import_log.id,
+        "success_count": len(valid_points),
+        "failure_count": len(parse_errors),
+        "cost_seconds": cost_seconds,
+    }
 
 
 @api_view(["POST"])
@@ -1023,9 +1220,10 @@ def import_data(request):
     if not file_record:
         return _json_response("文件不存在或已删除", code=404, status=404)
 
-    file_path = _resolve_dataset_file(file_record.url)
-    if file_path is None or not file_path.exists():
-        return _json_response("文件路径不存在", code=404, status=404)
+    ok, result = _do_import_track(file_record, admin_id)
+    if ok:
+        return _json_response(data=result)
+    return _json_response(message=result.get("message", "导入失败"), code=500, status=500)
 
     start_time = time.perf_counter()
     parsed_rows, parse_errors = _parse_track_file(file_path)
@@ -1159,15 +1357,51 @@ def import_data(request):
 file_upload = upload_file
 
 
+@api_view(['POST'])
+def import_datasets_all(request):
+    """Run the datasets import script (imports CSVs from BackEnd/datasets into BackEnd/db.sqlite3)."""
+    try:
+        script = Path(settings.BASE_DIR) / 'BackEnd' / 'scripts' / 'import_datasets_to_sqlite.py'
+        if not script.exists():
+            return _json_response('import script not found', code=404, status=404)
+
+        proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=600)
+        output = proc.stdout + '\n' + proc.stderr
+        status_code = 200 if proc.returncode == 0 else 500
+        return _json_response(data={'output': output, 'returncode': proc.returncode}, code=200, status=status_code)
+    except Exception as exc:
+        return _json_response('import failed: ' + str(exc), code=500, status=500)
+
+
+@api_view(['GET'])
+def upload_template(request):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = '轨迹数据模板'
+    sheet.append(['序号', 'GPS时间', '经度', '纬度', 'x', 'y', '速度(km/h)', '航向', '作业状态', '幅宽(m)', '深度(mm)', '耕深标准值'])
+    sheet.append([1, '2022/10/25 17:54', 131.473573, 47.131643, 5222016.527, 460060.5567, 3.66696, 78.1, 'TRUE', 5.3, 399, 300])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+
+    response = HttpResponse(
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = 'attachment; filename="track_upload_template.xlsx"'
+    return response
+
+
 @api_view(["GET"])
 def echarts_members(request):
     rows = _fetch_all(
         """
-        SELECT MONTH(creat_time) AS m, COUNT(*) AS c
+        SELECT CAST(strftime('%m', creat_time) AS INTEGER) AS m, COUNT(*) AS c
         FROM user
         WHERE creat_time IS NOT NULL
-        GROUP BY MONTH(creat_time)
-        ORDER BY MONTH(creat_time)
+        GROUP BY CAST(strftime('%m', creat_time) AS INTEGER)
+        ORDER BY CAST(strftime('%m', creat_time) AS INTEGER)
         """
     )
     data = [0, 0, 0, 0]

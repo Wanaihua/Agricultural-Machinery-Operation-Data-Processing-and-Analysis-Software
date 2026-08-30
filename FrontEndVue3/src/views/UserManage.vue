@@ -3,16 +3,10 @@
     <div class="page-head">
       <div>
         <div class="amod-page-title">用户管理</div>
-        <div class="amod-subtitle">支持用户信息的增删改查与角色绑定</div>
       </div>
-          <div class="action-group">
-            <el-input v-model="keyword" placeholder="搜索用户名或昵称" clearable class="search-input" />
-            <el-button type="primary" @click="openCreate">新增用户</el-button>
-            <el-button type="danger" @click="deleteBatch">批量删除</el-button>
-          </div>
     </div>
 
-    <el-card class="amod-card" shadow="never">
+    <div class="toolbar-row">
       <el-form :inline="true" :model="filters" class="filter-form">
         <el-form-item label="用户名">
           <el-input v-model="filters.username" clearable />
@@ -26,13 +20,23 @@
         <el-form-item>
           <el-button type="primary" @click="applyFilters">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
+          <el-button class="ml-10" type="primary" @click="openCreate">新增</el-button>
+          <el-button type="danger" @click="deleteBatch">批量删除</el-button>
         </el-form-item>
       </el-form>
 
-    </el-card>
+    </div>
 
-    <el-card class="amod-card" shadow="never">
-      <el-table :data="pagedUsers" border stripe @selection-change="handleSelectionChange">
+    <el-card class="amod-card table-card" shadow="never">
+      <el-table
+        :data="pagedUsers"
+        border
+        stripe
+        class="user-table"
+        empty-text="暂无用户数据"
+        :header-cell-class-name="headerBg"
+        @selection-change="handleSelectionChange"
+      >
         <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" min-width="140" />
@@ -45,8 +49,8 @@
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
-            <el-button link type="primary" @click="openEdit(scope.row)">编辑</el-button>
-            <el-button link type="danger" @click="removeUser(scope.row.id)">删除</el-button>
+            <el-button text type="primary" @click="openEdit(scope.row)">编辑</el-button>
+            <el-button text type="danger" @click="removeUser(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -67,9 +71,6 @@
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
-          <el-input v-model="form.password" type="password" show-password placeholder="请输入密码或更新密码" />
-        </el-form-item>
         <el-form-item label="昵称" prop="nickname">
           <el-input v-model="form.nickname" />
         </el-form-item>
@@ -83,7 +84,7 @@
           <el-input v-model="form.address" />
         </el-form-item>
         <el-form-item label="角色" prop="role">
-          <el-select v-model="form.role" placeholder="请选择角色" style="width: 100%">
+          <el-select v-model="form.role" placeholder="请选择角色" class="w-full">
             <el-option v-for="item in roles" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
@@ -113,6 +114,7 @@ const dialogVisible = ref(false)
 const saving = ref(false)
 const formRef = ref()
 const form = reactive({ id: null, username: '', password: '', nickname: '', email: '', phone: '', address: '', role: null })
+const headerBg = 'headerBg'
 
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -171,6 +173,15 @@ function resetForm() {
 }
 
 function applyFilters() {
+  page.current = 1
+}
+
+function applyKeyword() {
+  page.current = 1
+}
+
+function clearKeyword() {
+  keyword.value = ''
   page.current = 1
 }
 
@@ -278,14 +289,51 @@ onMounted(loadData)
   gap: 16px;
 }
 
-.action-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.search-input {
+  width: 240px;
 }
 
-.search-input {
-  width: 260px;
+.toolbar-row {
+  padding: 12px 0 4px;
+}
+
+.table-card {
+  padding-top: 4px;
+}
+
+.filter-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.filter-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.filter-form :deep(.el-form-item__label) {
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.user-table :deep(.headerBg) {
+  background: #f3f6f1 !important;
+  color: #2f6f4e;
+  font-weight: 700;
+}
+
+.user-table :deep(.el-table__header-wrapper th) {
+  height: 46px;
+}
+
+.user-table :deep(.el-table__body td) {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.user-table :deep(.el-table__row:hover > td) {
+  background: #f8fbf6 !important;
 }
 
 .pager-wrap {

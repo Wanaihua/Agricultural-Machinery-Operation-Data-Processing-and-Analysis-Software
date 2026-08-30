@@ -48,15 +48,26 @@ class FileSerializer(serializers.ModelSerializer):
 
 
 class ImportLogSerializer(serializers.ModelSerializer):
+    admin_name = serializers.CharField(source='admin_id.nickname', read_only=True)
     class Meta:
         model = ImportLog
         fields = '__all__'
 
 
 class TrackSerializer(serializers.ModelSerializer):
+    file_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Track
         fields = '__all__'
+
+    def get_file_name(self, obj):
+        """从import_log获取上传的原始文件名（import_log.id = track.trackid）"""
+        from BackEnd.generated_api.models import ImportLog
+        log = ImportLog.objects.filter(id=obj.trackid).first()
+        if log:
+            return log.file_name
+        return None
 
 
 class TrackpointsSerializer(serializers.ModelSerializer):

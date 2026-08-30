@@ -25,6 +25,8 @@ body,
 }
 
 * {
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -35,6 +37,56 @@ a {
 
 .amod-page {
   min-height: 100%;
+}
+
+.crud-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.toolbar-row {
+  padding: 12px 0 4px;
+}
+
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.filter-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.filter-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.filter-form :deep(.el-form-item__label) {
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.search-input {
+  width: 240px;
+}
+
+.pager-wrap {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
 }
 
 .amod-card {
@@ -74,4 +126,77 @@ a {
 @keyframes track-dash {
   from { stroke-dashoffset: 0; }
   to { stroke-dashoffset: -200; }
+}
+
+/* Utility classes imported from FrontEnd project for parity */
+.ml-5{
+  margin-left: 5px;
+}
+.mr-5{
+  margin-right: 5px;
+}
+.pd-10{
+  padding: 10px 0;
+}
+
+/* Additional utility classes from FrontEnd for common inline styles */
+.inline-block {
+  display: inline-block;
+}
+.flex-center {
+  display: flex;
+  align-items: center;
+}
+.h-100vh {
+  height: 100vh;
+}
+.w-200 {
+  width: 200px;
+}
+.mr-10 {
+  margin-right: 10px;
+}
+.ml-10 {
+  margin-left: 10px;
+}
+.card-padding {
+  padding: 10px 0;
+}
+.avatar-img {
+  width: 30px;
+  border-radius: 50%;
+}
+
+/* full width helper */
+.w-full {
+  width: 100% !important;
+}
+
+/* Shared table style to align management pages */
+.table-card {
+  padding-top: 4px;
+}
+
+.amod-table :deep(.headerBg),
+.amod-table :deep(.el-table__header-wrapper th) {
+  background: #f3f6f1 !important;
+  color: #2f6f4e;
+  font-weight: 700;
+}
+
+.amod-table :deep(.el-table__header-wrapper th) {
+  height: 46px;
+}
+
+.amod-table :deep(.el-table__body td) {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.amod-table :deep(.el-table__row:hover > td) {
+  background: #f8fbf6 !important;
+}
+
+.amod-table :deep(.el-table__body-wrapper) {
+  border-radius: 0 0 18px 18px;
 }

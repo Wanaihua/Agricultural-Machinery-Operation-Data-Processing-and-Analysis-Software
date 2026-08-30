@@ -15,13 +15,17 @@ const routes = [
       { path: '', redirect: '/home' },
       { path: 'track', redirect: 'track/list' },
       { path: 'home', name: 'Home', component: () => import('@/views/Home.vue') },
+      { path: 'person-info', name: 'PersonInfo', component: () => import('@/views/PersonInfo.vue') },
+      { path: 'update-password', name: 'UpdatePassword', component: () => import('@/views/UpdatePassWord.vue') },
       { path: 'track/list', name: 'TrackList', component: () => import('@/views/TrackList.vue') },
       { path: 'track/map/:id', name: 'TrackMap', component: () => import('@/views/TrackMap.vue'), props: true },
       { path: 'data/import', name: 'DataImport', component: () => import('@/views/DataImport.vue') },
+      { path: 'import-log', name: 'ImportLog', component: () => import('@/views/ImportLog.vue') },
       { path: 'user', name: 'UserManage', component: () => import('@/views/UserManage.vue') },
       { path: 'role', name: 'RoleManage', component: () => import('@/views/RoleManage.vue') },
       { path: 'menu', name: 'MenuManage', component: () => import('@/views/MenuManage.vue') },
       { path: 'file', name: 'FileManage', component: () => import('@/views/File.vue') },
+      { path: 'workload-analysis', name: 'WorkloadAnalysis', component: () => import('@/views/WorkloadAnalysis.vue') },
     ],
   },
 ]
@@ -38,6 +42,8 @@ router.beforeEach((to, from, next) => {
     next()
     return
   }
+
+  // No special-case redirects here; permission logic handled in hasRoutePermission
 
   const user = localStorage.getItem('user')
   if (!user) {

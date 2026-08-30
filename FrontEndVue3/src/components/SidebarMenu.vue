@@ -1,10 +1,7 @@
 <template>
   <div class="sidebar-shell">
     <div class="brand-block">
-      <svg class="brand-logo" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <rect width="48" height="48" rx="8" fill="#4CAF50" />
-        <path d="M14 24l6 6 14-18" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
+      <img class="brand-logo" :src="brandLogo" alt="农机作业平台图标" />
       <div v-if="!collapsed" class="brand-text">
         <div class="brand-title">农机作业平台</div>
         <div class="brand-subtitle">AMOD Control Center</div>
@@ -42,7 +39,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   House,
   User,
@@ -55,6 +52,10 @@ import {
   Files as FilesIcon,
 } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
+import { getCurrentUser, isAdminUser } from '@/utils/auth'
+import brandLogo from '@/images/AOMD_log.png'
+
+const adminOnlyPaths = ['/user', '/role', '/menu', '/file']
 
 const props = defineProps({
   collapsed: {
@@ -65,12 +66,62 @@ const props = defineProps({
 
 const route = useRoute()
 
-const menuTree = computed(() => {
+function readMenus() {
   try {
     return JSON.parse(localStorage.getItem('menus') || '[]')
   } catch (error) {
     return []
   }
+}
+
+const menuTree = ref([])
+
+function filterMenusByRole(menus) {
+  if (isAdminUser(getCurrentUser())) {
+    return menus
+  }
+
+  const walk = (items) => {
+    return (items || [])
+      .map((item) => {
+        const normalized = normalizePath(item.path)
+        const children = walk(item.children || [])
+
+        if (item.children && item.children.length) {
+          if (!children.length) {
+            return null
+          }
+          return { ...item, children }
+        }
+
+        if (adminOnlyPaths.includes(normalized)) {
+          return null
+        }
+        return item
+      })
+      .filter(Boolean)
+  }
+
+  return walk(menus)
+}
+
+function syncMenus() {
+  menuTree.value = filterMenusByRole(readMenus())
+}
+
+function handleMenuUpdate() {
+  syncMenus()
+}
+
+onMounted(() => {
+  syncMenus()
+  window.addEventListener('menus-updated', handleMenuUpdate)
+  window.addEventListener('storage', handleMenuUpdate)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('menus-updated', handleMenuUpdate)
+  window.removeEventListener('storage', handleMenuUpdate)
 })
 
 const activePath = computed(() => route.path)
@@ -109,6 +160,7 @@ function resolveIcon(icon) {
 .sidebar-shell {
   height: 100%;
   color: #fff;
+  background: linear-gradient(180deg, #113024 0%, #173c2f 36%, #1d4a46 100%);
 }
 
 .brand-block {
@@ -117,15 +169,17 @@ function resolveIcon(icon) {
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(90deg, rgba(8, 26, 18, 0.55), rgba(33, 84, 73, 0.3));
 }
 
 .brand-logo {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  padding: 4px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
 }
 
 .brand-text {
@@ -137,21 +191,41 @@ function resolveIcon(icon) {
 .brand-title {
   font-size: 16px;
   font-weight: 700;
+  color: #f5fff8;
 }
 
 .brand-subtitle {
   font-size: 12px;
-  opacity: 0.7;
+  color: rgba(228, 241, 232, 0.72);
 }
 
 .sidebar-menu {
   border-right: none;
   padding: 12px 0;
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: #edf7f1;
+  --el-menu-active-color: #ffd77b;
 }
 
 .menu-icon {
   width: 1em;
   height: 1em;
   margin-right: 8px;
+}
+
+.sidebar-shell :deep(.el-menu-item),
+.sidebar-shell :deep(.el-sub-menu__title) {
+  border-radius: 10px;
+  margin: 4px 8px;
+}
+
+.sidebar-shell :deep(.el-menu-item:hover),
+.sidebar-shell :deep(.el-sub-menu__title:hover) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-shell :deep(.el-menu-item.is-active) {
+  background: linear-gradient(90deg, rgba(76, 175, 80, 0.24), rgba(33, 150, 243, 0.12));
+  color: #fff2c6;
 }
 </style>

@@ -72,6 +72,7 @@ export const setRoutes=() =>{
         children: [
           {path: 'personInfo', name: '个人信息', component: () => import('../views/PersonInfo.vue')},
           {path: 'updatePassWord', name: '修改密码', component: () => import('../views/UpdatePassWord.vue')},
+          {path: 'workloadAnalysis', name: '作业量统计分析', component: () => import('../views/WorkloadAnalysis.vue')},
         ]
       }
 

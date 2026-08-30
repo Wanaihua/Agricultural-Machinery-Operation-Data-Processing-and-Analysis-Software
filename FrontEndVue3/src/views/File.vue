@@ -3,12 +3,24 @@
     <div class="page-head">
       <div>
         <div class="amod-page-title">文件管理</div>
-        <div class="amod-subtitle">上传的文件与资源管理</div>
       </div>
     </div>
 
-    <el-card class="amod-card" shadow="never">
-      <el-table :data="files" border stripe row-key="id">
+    <el-card class="amod-card table-card" shadow="never">
+      <div class="batch-actions" v-if="selectedIds.length">
+        <span>已选 {{ selectedIds.length }} 项</span>
+        <el-button type="danger" size="small" @click="batchRemove">批量删除</el-button>
+        <el-button size="small" @click="toggleSelect">反选</el-button>
+        <el-button size="small" @click="clearSelection">取消选择</el-button>
+      </div>
+      <el-table
+        :data="files"
+        border stripe row-key="id"
+        class="amod-table"
+        @selection-change="onSelectionChange"
+        ref="tableRef"
+      >
+          <el-table-column type="selection" width="50" />
           <el-table-column prop="id" label="ID" width="80" />
           <el-table-column prop="name" label="名称" min-width="220" />
           <el-table-column prop="type" label="类型" width="100" />
@@ -38,6 +50,8 @@ import request from '@/utils/request'
 import { unwrapListResponse } from '@/utils/response'
 
 const files = ref([])
+const selectedIds = ref([])
+const tableRef = ref(null)
 
 async function load() {
   const res = await request.get('/api/file/')
@@ -54,9 +68,25 @@ function formatSize(v) {
 }
 
 function download(row) {
-  // open the file URL in a new tab; backend serves static files via absolute URL
   if (row.url) window.open(row.url, '_blank')
   else ElMessage.warning('没有可下载的文件地址')
+}
+
+function onSelectionChange(rows) {
+  selectedIds.value = rows.map(r => r.id)
+}
+
+function toggleSelect() {
+  const table = tableRef.value
+  if (!table) return
+  files.value.forEach(row => {
+    const isSelected = selectedIds.value.includes(row.id)
+    table.toggleRowSelection(row, !isSelected)
+  })
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
 }
 
 async function remove(id) {
@@ -66,7 +96,20 @@ async function remove(id) {
     ElMessage.success('删除成功')
     await load()
   } catch (err) {
-    // cancel 或 出错
+    if (err !== 'cancel') ElMessage.error('删除失败')
+  }
+}
+
+async function batchRemove() {
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${selectedIds.value.length} 个文件吗？`, '提示', { type: 'warning' })
+    for (const id of selectedIds.value) {
+      await request.delete(`/api/file/${id}/`)
+    }
+    ElMessage.success('批量删除成功')
+    clearSelection()
+    await load()
+  } catch (err) {
     if (err !== 'cancel') ElMessage.error('删除失败')
   }
 }
@@ -75,9 +118,12 @@ onMounted(load)
 </script>
 
 <style scoped>
-.crud-page {
+.batch-actions {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--amod-text-soft);
 }
 </style>
